@@ -5,7 +5,8 @@ import User from '../models/User';
 import File from '../models/File';
 import Appointment from '../models/Appointment';
 import Notification from '../schemas/Notification';
-import Mail from '../../lib/Mail';
+import CancellationMail from '../jobs/CancellationMail';
+import Queue from '../../lib/Queue';
 
 class AppointmentController {
   async index(req, res) {
@@ -117,7 +118,8 @@ class AppointmentController {
   }
 
   async delete(req, res) {
-    const appointment = await Appointment.findByPk(req.params.id, {
+    const appointment = await Appointment.findOne({
+      where: { id: req.params.id, canceled_at: null },
       include: [
         {
           model: User,
@@ -131,6 +133,12 @@ class AppointmentController {
         },
       ],
     });
+
+    if (!appointment) {
+      return res.status(404).json({
+        error: 'Appointment not found',
+      });
+    }
 
     if (appointment.user_id !== req.userId) {
       return res.status(401).json({
@@ -150,17 +158,8 @@ class AppointmentController {
 
     await appointment.save();
 
-    await Mail.sendMail({
-      to: `${appointment.provider.name} <${appointment.provider.email}>`,
-      subject: 'Agendamento cancelado',
-      template: 'cancellation',
-      context: {
-        provider: appointment.provider.name,
-        user: appointment.user.name,
-        date: format(appointment.date, "'dia' dd 'de' MMMM', às' H:mm'h''", {
-          locale: pt,
-        }),
-      },
+    await Queue.add(CancellationMail.key, {
+      appointment,
     });
 
     return res.json(appointment);
